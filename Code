@@ -1,0 +1,437 @@
+实验程序
+top：
+module top(
+
+input clk, input rst, input [3:0] n, output [5:0] opcode, output [31:0] f, output [31:0] insAddr, output [31:0] nextAddr, output [31:0] displaydata, output [31:0] A,B, output [3:0] aluOP //alu 的运算类型
+
+//当前 PC 地址 //PC 的下一个地址
+
+);
+
+wire [31:0] instrument; wire [5:0] func; wire [4:0] rs; wire [4:0] rt; wire [4:0] rd; wire [4:0] sa; wire [31:0] rsOut;
+wire [31:0] rtOut; wire [15:0] imme; wire [25:0] addr; //J 类型指令地址 wire z; //是否为 0 标志 wire [1:0] pcindex; //pc 值的来源 wire ram2reg; //是否将数据从 ram 中写入寄存器中 wire ramWE; //是否写内存 wire regWE; //是否写寄存器 wire imm; //是否产生立即数 wire shift; //是否移位？ wire [1:0] isrt; //目的寄存器地址，=1 选择 rt，否则选择 rd wire sign_ext; //立即数扩展，=1 为符号扩展，否则为零扩展 wire jal; //是否调用子程序跳转 wire [31:0] immediate; //扩展后的立即数 wire [31:0] PCadd4; //存入寄存器中的值 wire oc; wire [4:0] CU2regaddr; wire [1:0] DBDataSrc; // 决定将什么数据传入寄存器组 Write Data 端，0 为 ALU 结 果， 为存储器 PCadd pc( .pcsource(pcindex), .curAddr(insAddr), .immediate(immediate), .addr(addr), //J 类型指令地址 .rsdata(rsOut), .PCadd4(PCadd4), .nextAddr(nextAddr) ); PC mypc(rst,clk,nextAddr,insAddr); alu myalu( .a(A), .b(B), .op(aluOP), .f(f), .z(z) ); wire mRD; wire mWR; wire [31:0] wdata; wire [31:0] rdata; extend myextend(sign_ext,imme,immediate); ID myid(instrument,opcode,func,rs,rt,rd,sa,imme,addr); wire [4:0] waddr; //写寄存器地址 wire [4:0] addrin1,addrin2,addrout;
+rtrd_select rrs( .regDst(isrt), .addrin1(rt), .addrin2(rd), .addrin3(CU2regaddr), .addrout(waddr) ); wire [31:0] writedata;// DB 总线值 //选择 A 的输入端 shift_select ss( .shift(shift), .datain1(rsOut), .sa(sa), .dataout(A) ); wire [31:0] datain1,datain2,dataout; //选择 B 的输入端 imm_select is( .imm(imm), .datain1(rtOut), .datain2(immediate), .dataout(B) ); // 决定将什么数据传入寄存器组 Write Data 端，0 为 ALU 结果，1 为存储器 wire [31:0] dout; reg_select regs( .select(DBDataSrc), .datain1(f), //alu 的输出值 .datain2(dout), //存储器的输出 .datain3(PCadd4), .dataout(writedata) ); wire [31:0] rdata1,rdata2; registers myregs( .clk(clk), .oc(1'b0), .raddr1(rs), .raddr2(rt), .we(regWE), .waddr(waddr), .wdata(writedata), .rdata1(rsOut), .rdata2(rtOut) );
+// 实例化控制单元 controlunit mycontrolunit( .opcode(opcode), .func(func), .z(z), .pcindex(pcindex), .ram2reg(ram2reg), .ramWE(ramWE), .aluOP(aluOP), .regWE(regWE), .imm(imm), .shift(shift), .isrt(isrt), .sign_ext(sign_ext), .jal(jal), .DBDataSrc(DBDataSrc), .oc(oc), .waddr(CU2regaddr) ); ROM myrom(insAddr,instrument); IOManager myIO(
+
+.addr(f[5:0]), //地址[5:0]
+
+.din(rtOut), //内存输入数据[31:0]
+
+.dout(dout), //内存或者开关获得数据输出
+
+.ce(oc),
+
+.we(ramWE), //内存使能端
+
+.clk(clk),
+
+.switch(n), //开关输入数据
+
+.displaydata(displaydata) //输出到 led 数据
+
+);
+
+initial $monitor($time,,"IOManager:dout=%h,displaydata=%h",dout,displaydata); endmodule
+
+PCadd：
+
+module PCadd(
+
+input clk, input rst, input [1:0] pcsource, input [31:0] curAddr, input [31:0] immediate, input [25:0] addr, input [31:0] rsdata, output reg [31:0] PCadd4,
+
+//J 类型指令地址 //jr，将 rs 的地址取出
+output reg [31:0] nextAddr );
+
+wire [31:0] PCaddr4=curAddr+4;
+
+always@(*)
+
+begin if(rst==0) begin nextAddr<=0; end else if(pcsource==2'b00) nextAddr<=PCaddr4; else if(pcsource==2'b01) nextAddr<=PCaddr4+(immediate<<2); else if(pcsource==2'b10) nextAddr<=rsdata; else if(pcsource==2'b11) begin PCadd4<=PCaddr4; nextAddr<={PCaddr4[31:28],addr,2'b00}; end
+
+end
+
+//顺序执行
+
+initial $monitor($time,,"PCadd:pcsorce=%b,PCaddr4=%h,immediate=%h",pcsource,PCaddr4,immediate ); initial $monitor($time,,"PCadd:PCadd4=%h,nextAddr=%h",PCadd4,nextAddr); endmodule
+
+PC
+
+module PC(
+
+input rst, input clk, input [31:0] nextAddr, output reg [31:0] insAddr ); always @(posedge clk)
+
+begin
+
+if(rst==1'b0)
+
+insAddr<=32'h0;
+
+else
+
+insAddr=nextAddr;
+
+end
+initial
+
+$monitor($time,,"PC:Addr=%h",insAddr);
+
+endmodule
+
+alu
+
+module alu(
+
+input [31:0] a, input [31:0] b, input [3:0] op, output reg [31:0] f, output reg z ); //行为建模 always@(*) begin case(op) 4'b0000:f<=32'b0; 4'b0001:f<=a+b; 4'b0010:f<=a-b; 4'b0011:f<=a&b; 4'b0100:f<=a|b; 4'b0101:f<=a^b; 4'b0110:f<=b<<a; 4'b0111:f<=b>>a; 4'b1000:f<=b<<16; default:f<=32'b0; endcase z=~(|f); end initial $monitor($time,,"alu:a=%h,b=%h,operation=%b",a,b,op); initial
+
+//sll //srl //lui
+
+$monitor($time,,"alu:f=%h,z=%b",f,z);
+
+endmodule
+
+extend
+
+module extend(
+
+input sign_ext, input [15:0] imm, output reg [31:0] immediate ); always@(*) begin if(sign_ext==1'b0)//需要进行零扩展
+immediate<={16'b0,imm}; else//否则进行符号扩展 immediate={{16{imm[15]}},imm}; end
+
+endmodule
+
+ID
+
+module ID(
+
+input [31:0] instrument, output reg [5:0] opcode, output reg [5:0] func, output reg [4:0] rs, output reg [4:0] rt, output reg [4:0] rd, output reg [4:0] sa, output reg [15:0] immediate, output reg [25:0] addr ); wire [1:0] pcindex; wire ram2reg,ramWE,regWE,imm,shift,isrt,sign_ext,jal; wire z; wire [3:0] aluOP; wire [31:0] f; reg [31:0] wdata; wire [31:0] rdata1,rdata2; always @(*) begin //初始化
+
+opcode<=instrument[31:26];
+
+rs<=5'b00000;
+
+rt<=5'b00000;
+
+rd<=5'b00000;
+
+sa<=5'b00000;
+
+immediate<=32'b0;
+
+//立即数
+
+addr<=25'b0; case(opcode)
+
+6'b000000:
+
+//R 类型指令
+
+begin func<=instrument[5:0]; sa<=instrument[10:6]; rd<=instrument[15:11]; rt<=instrument[20:16]; rs<=instrument[25:21]; end
+
+//I 类型指令
+6'b001000, 6'b001100, 6'b001101, 6'b001110, 6'b100011, 6'b101011, 6'b000100, 6'b000101, 6'b001111:
+
+begin
+
+immediate<= instrument[15:0];
+
+rt<=instrument[20:16]; rs<=instrument[25:21];
+
+end //J 类型指令 6'b000010, 6'b000011:
+
+begin
+
+addr<=instrument[25:0];
+
+end default:rs<=5'b00000;
+
+endcase end initial
+
+$monitor($time,,"ID:instrument=%b",instrument);
+
+initial $monitor($time,,"ID:opcode=%b,rs=%b,rt=%b,rd=%b,sa=%b,immediate=%h,func=%b,addr=%h" ,opcode,rs,rt,rd,sa,immediate,func,addr); endmodule
+
+rtrd_select
+
+module rtrd_select(
+
+input [1:0] regDst, input [4:0] addrin1, input [4:0] addrin2, input [4:0] addrin3, output reg [4:0] addrout ); always @(*) begin if(regDst==2'b01) addrout=addrin1; else if(regDst==2'b00) addrout=addrin2;
+else if(regDst==2'b10) addrout=addrin3;
+
+end
+
+initial
+
+$monitor($time,,"addrout=%b",addrout);
+
+endmodule
+
+shift_select
+
+//决定 A 输入端的值和 regs 寄存器组的读端口 1 的地址输入
+
+module shift_select(
+
+input shift, input [31:0] datain1, input [4:0] sa, output reg [31:0] dataout ); always@(*)
+
+begin
+
+if(shift==0) dataout=datain1;
+
+else dataout={27'b0,sa};
+
+end initial
+
+$monitor($time,,"shift_select:shift=%b,datain=%h,sa=%b",shift,datain1,sa); initial
+
+$monitor($time,,"shift_select:dataout=%b",dataout);
+
+endmodule
+
+imm_select
+
+module imm_select( input imm, input [31:0] datain1, input [31:0] datain2, output reg [31:0] dataout ); //决定 b 输入端的值 always @(*) begin if(imm==0) dataout=datain1; else dataout=datain2; end endmodule
+reg_select
+
+// 决定将什么数据传入寄存器组 Write Data 端，0 为 ALU 结果，1 为存储器
+
+module reg_select(
+
+input [1:0] select, input [31:0] datain1, input [31:0] datain2, input [31:0] datain3, output reg [31:0] dataout ); always @(*)
+
+begin if(select==2'b00) dataout=datain1; else if(select==2'b01) dataout=datain2; else if(select==2'b10) dataout=datain3;
+
+end
+
+initial
+
+$monitor($time,,"wdata_select:dataout=%h",dataout);
+
+endmodule
+
+registers
+
+module registers(
+
+input mRD, input clk, input oc, input [4:0] raddr1, input [4:0] raddr2, input we, input [4:0] waddr, input [31:0] wdata, input [31:0] rdata, output reg [31:0] rdata1, output reg [31:0] rdata2 ); reg[31:0] regts[1:31];
+
+always @(negedge clk)//写端口
+
+begin
+
+if((we==1'b1)&&(waddr!=5'b00000))
+
+begin regts[waddr]<=wdata; $display($time,,"regs:write %h to %h",wdata,waddr);
+end end always @(*)//读端口 1 begin if(oc==1'b1)//禁止输出 begin rdata1=32'bz; end else if(raddr1==5'b00000)//$0 号寄存器只保存 0 begin rdata1=32'b0; end else begin rdata1=regts[raddr1]; end $monitor($time,,"regs:read R%d data1=%h",raddr1,rdata1); end always @(*)//读端口 2 begin if(oc==1'b1)//禁止输出 begin rdata2=32'bz; end else if(raddr2==5'b00000)//$0 号寄存器只保存 0 begin rdata2=32'b0; end else begin rdata2=regts[raddr2]; end
+
+$monitor($time,,"regs:read R%d data2=%h",raddr2,rdata2);
+
+end endmodule
+
+controlunit
+
+module controlunit(
+
+input [5:0] opcode, //MIPS 指令类型 input [5:0] func, //MIPS 指令功能码 input z, //是否为 0 标志 output reg [1:0] pcindex, //pc 值的来源 output reg ram2reg, //是否将数据从 ram 中写入寄存器中 output reg ramWE, //是否写内存
+output reg [3:0] aluOP, //alu 的运算类型 output reg regWE, //是否写寄存器 output reg imm, //是否产生立即数 output reg shift, //是否移位？ output reg [1:0] isrt, //目的寄存器地址，=1 选择 rt，否则选择 rd output reg sign_ext, //立即数扩展，=1 为符号扩展，否则为零扩展 output reg jal, //是否调用子程序跳转 output reg mRD, //数据存储器读控制信号，为 1 读 output reg mWR, //数据存储器写控制信号，为 1 写 output reg [1:0] DBDataSrc, //数据保存的选择端，为 0 来自 ALU 运算结果的输出， 为 1 来自数据寄存器（Data MEM）的输出 output reg oc, //控制存储器的读 output reg [4:0] waddr //jal 指令固定将地址存入$31 ); always @(*) begin //先设置好默认值 shift<=1'b0; ram2reg<=1'b0; ramWE<=1'b0; regWE<=1'b0; imm<=1'b0; isrt<=1'b0; sign_ext<=1'b0; pcindex<=2'b00; aluOP<=4'b0000; jal<=1'b0; oc<=1'b0; DBDataSrc <= 2'b00; waddr<=5'b00000; case(opcode) //R 指令 6'b000000:
+
+case(func) 6'b100000: //加法 add begin aluOP<=4'b0001; regWE<=1'b1; end 6'b100010: //减法 sub begin aluOP<=4'b0010; regWE<=1'b1;
+sign_ext<=1'b1;
+
+end 6'b100100:
+
+begin aluOP<=4'b0011; regWE<=1'b1; end 6'b100101:
+
+begin aluOP<=4'b0100; regWE<=1'b1; end 6'b100110:
+
+//与 and
+
+//或 or
+
+//异或 xor
+
+begin aluOP<=4'b0101; regWE<=1'b1; end 6'b000000: //左移位 sll begin aluOP<=4'b0110; regWE<=1'b1; shift<=1'b1; end 6'b000010: //右移位 srl begin aluOP<=4'b0111; regWE<=1'b1; shift<=1'b1; end 6'b000011: //算术右移 sra begin aluOP<=4'b0111; regWE<=1'b1; shift<=1'b1; end 6'b001000: //跳转 jr,从寄存器取 rs 的值送入 PCadd 中 begin shift<=1'b1; jal<=1'b1; //调用指令 pcindex<=2'b10; end endcase
+
+//I 指令 //sign_ext=0,零扩展；1，符号扩展
+6'b001000://addi 指令 begin aluOP<=4'b0001; regWE<=1'b1; imm<=1'b1; isrt<=1'b1; sign_ext<=1'b0; end 6'b001100://andi 指令 begin aluOP<=4'b0011; regWE<=1'b1; imm<=1'b1; isrt<=1'b1; sign_ext<=1'b0; //需要进行零扩展 end 6'b001101://opcode 为 001101 时，为 ori 指令 begin aluOP<=4'b0100; regWE<=1'b1; imm<=1'b1; isrt<=1'b1; sign_ext<=1'b0; //需要进行零扩展 end 6'b001110://xori 指令 begin aluOP<=4'b0101; regWE<=1'b1; imm<=1'b1; isrt<=1'b1; sign_ext<=1'b0; end 6'b100011://lw begin sign_ext<=1'b1; imm<=1'b1; aluOP<=4'b0001; isrt<=1'b1; regWE<=1'b1; oc<=1'b1; DBDataSrc<=2'b01;
+
+//需要进行零扩展
+
+//需要进行零扩展
+
+//符号扩展
+
+end 6'b101011://sw begin
+sign_ext<=1'b1; ramWE<=1'b1; imm<=1'b1; aluOP<=4'b0001; isrt<=1'b1;
+
+end 6'b000100://beq begin
+
+sign_ext<=1'b1; regWE<=1'b0;
+
+pcindex<=z?2'b01:2'b00; //判断是否相等
+
+aluOP<=4'b0010; isrt<=1'b1;
+
+end 6'b000101://bne begin
+
+isrt<=1'b1; sign_ext<=1'b1; regWE<=1'b0;
+
+pcindex<=z?2'b00:2'b01; //判断是否相等
+
+aluOP<=4'b0010;
+
+end 6'b001111: //lui 是一元运算，将 lui 左移 16 位之后给 rt begin sign_ext<=1'b0; aluOP<=4'b1000; isrt<=1'b1; end 6'b000010: //无条件跳转 j begin pcindex<=2'b11; regWE<=1'b1; end 6'b000011:
+
+begin jal<=1'b1; pcindex<=2'b11; isrt<=2'b10; DBDataSrc <= 2'b10; waddr<=5'b11111; end endcase end initial
+$monitor($time,,"CU:opcode=%b,func=%b,z=%b",opcode,func,z);
+
+initial $monitor($time,,"CU:aluOP=%b,regWE=%b,sign_ext=%b,shift=%b,oc=%b",aluOP,regWE,s ign_ext,shift,oc); endmodule
+
+ROM
+
+module ROM(
+
+input [31:0] addr, output [31:0] instrument ); reg [31:0] ins; always@(*) case(addr[31:2]) 32'h0:
+
+//指令
+
+ins=32'b001000_00000_00011_0000000000000001;//addi $0,1,$3 32'h1:
+
+ins=32'b001100_00011_00010_0000000000000001;//andi $3,1->$2 32'h3:
+
+ins=32'b001101_00000_00100_0000000000000111;//ori $0|7->$4 32'h4:
+
+ins=32'b001110_00000_00101_0000000000000001;//xori $0^1->$5 32'h5:
+
+ins=32'b101011_00010_00011_0000000000001010;//sw$2,$3,10 32'h6:
+
+ins=32'b100011_00010_00011_0000000000001010;//lw $3,10($2) 32'h7:
+
+ins=32'b000100_00011_00001_0000000000000010; //beq,if$3==$3,jump 32'h8:
+
+ins=32'b000101_00100_00100_0000000000000010; //bne,if$4!=$3,jump 32'h9:
+
+ins=32'b000000_00010_00011_00110_00000_100000; //add $2+$3=$6 32'ha:
+
+ins=32'b000000_00110_00010_00111_00000_100010;//sub $6,$2,$7 32'hb:
+
+ins=32'b000000_00011_00010_00001_00000_100100;//and $3,$2,$1 32'hc:
+
+ins=32'b000000_00011_00010_01000_00000_100101;//or $3,$2,$8 32'hd:
+
+ins=32'b000000_00011_00010_01001_00000_100110; //xor $3,$2,$9 32'he:
+
+ins=32'b000000_00000_00010_00001_01010_000000;//sll $1,$2,10 32'hf:
+
+ins=32'b000000_00000_00001_00010_01010_000010;//srl $2,$1,10
+32'h10:
+
+ins=32'b000000_00000_00010_00001_00010_000011;//sra $1,$2,10 32'h11:
+
+ins=32'b001111_00000_00010_0000000000000001;//lui $2,1 32'h12:
+
+ins=32'b000011_00000000000010011100010000;//jal 10000 32'h13:
+
+ins=32'b000010_00000000000000000000001000;// j 8
+
+32'h2710:
+
+ins=32'b000000_11111_00000_00000_00000_001000;// jr $31
+
+// // // // // // // // // // // // // // // // // // // // // // // //
+
+endmodule
+
+32'h0:
+
+ins=32'b001101_00000_00001_0000000000000001;//ori $0|1->$1 32'h1:
+
+ins=32'b001101_00000_00010_0000000000000001;//ori $0|1->$2 32'h2:
+
+ins=32'b100011_00000_00011_0000000000100000;//lw$0,$3,20h 32'h3:
+
+ins=32'b001101_00000_00101_0000000000000010;//ori $0|2->$5 32'h4:
+
+ins=32'b000000_00010_00001_00110_00000_100000;//add $2,$1,$6 32'h5:
+
+ins=32'b000000_00000_00010_00001_00000_100101;//or $0,$2,$1 32'h6:
+
+ins=32'b000000_00000_00110_00010_00000_100101;//or $0,$6,$2 32'h7:
+
+ins=32'b001000_00101_00101_0000000000000001; //addi $5,$5,1 32'h8:
+
+ins=32'b000100_00101_00011_0000000000000001; //beq $5,$3,output 32'h9:
+
+ins=32'b000010_00000_00000_00000_00000_000100; //j fib 32'ha:
+
+ins=32'b000000_000000_00010_00100_00000_100101; //or $0,$2,$4 32'hb:
+
+ins=32'b101011_00000_00100_0000000000010000;//sw $0,$4,10h endcase assign instrument=ins; initial
+
+$monitor($time,,"ROM:instrument=%b",instrument);
+
+IOManager
+
+module IOManager(
+
+input [5:0] addr, input [31:0] din,
+
+//地址 //内存输入数据
+input ce, //内存读使能端 input we, //内存写使能端 input clk, input [3:0] switch, //开关输入数据 output [31:0] dout, //内存或者开关获得数据 output reg [31:0] displaydata //输出到 led 数据 ); reg [31:0] indata,outdata; wire [31:0] ramdout; wire ramWE; wire enable; assign enable = ce & (~addr[5]); // ce = 1 时，addr = 0xxxxx 则从内存读取数据，否则从 开关读取数据 assign ramWE = we & (~addr[4]); // we = 1 时，addr = 0xxxxx 则输出到内存，否则输出 到 led ram1 myram(clk,enable,ramWE,addr[3:0],din,ramdout);
+
+assign dout=addr[5]?{{28{1'b0}},switch}:ramdout;
+
+always @(posedge clk) begin
+
+if((addr[4]==1'b1)&&we)
+
+//直接输出结果 f(n)
+
+displaydata<=din; end initial
+
+$monitor($time,,"IOManager:addr=%h,din=%h,switch=%b",addr,din,switch);
+
+endmodule
+
+ram1
+
+module ram1(
+
+input clk, input ce, input we, input [3:0] addr, input [31:0] wdata, output reg [31:0] rdata );
+
+reg [31:0] ram_data [0:31];
+
+always @(*)//读端口
+
+if(ce==1'b0)//片选信号为 1，禁止输出
+
+rdata=32'bz;//高阻态
+
+else
+
+begin rdata=ram_data[addr]; $display($time,,"RAM:read R %h data=%h",addr,rdata);
+
+end
+always @(negedge clk)//写端口 if(we==1'b1) begin ram_data[addr]<=wdata; $display($time,,"RAM:write %h to %h",wdata,addr); end endmodule
+
+module sim( );
+
+reg rst=1'b1;
+
+wire [31:0] insAddr; wire [31:0] nextAddr; wire [3:0] n; wire [31:0] f; wire [5:0] opcode; wire [31:0] display; wire [31:0] A,B; wire [3:0] aluOP;
+
+assign n=4'b0101;
+
+//当前 PC 地址 //PC 的下一个地址
+
+initial begin
+
+#2 rst=1'b0;
+
+#4 rst=1'b1;
+
+#300 $finish;
+
+end
+
+parameter clk_period=10;
+
+reg clk; initial begin clk=1'b0; forever #(clk_period/2)clk=~clk; end top mytop(clk,rst,n,opcode,f,insAddr,nextAddr,display,A,B,aluOP); endmodule
