@@ -1,0 +1,12 @@
+实验程序
+top：
+module top(
+
+input clk, input rst, input [3:0] n, output [5:0] opcode, output [31:0] f, output [31:0] insAddr, output [31:0] nextAddr, output [31:0] displaydata, output [31:0] A,B, output [3:0] aluOP //alu 的运算类型
+
+//当前 PC 地址 //PC 的下一个地址
+
+);
+
+wire [31:0] instrument; wire [5:0] func; wire [4:0] rs; wire [4:0] rt; wire [4:0] rd; wire [4:0] sa; wire [31:0] rsOut;
+wire [31:0] rtOut; wire [15:0] imme; wire [25:0] addr; //J 类型指令地址 wire z; //是否为 0 标志 wire [1:0] pcindex; //pc 值的来源 wire ram2reg; //是否将数据从 ram 中写入寄存器中 wire ramWE; //是否写内存 wire regWE; //是否写寄存器 wire imm; //是否产生立即数 wire shift; //是否移位？ wire [1:0] isrt; //目的寄存器地址，=1 选择 rt，否则选择 rd wire sign_ext; //立即数扩展，=1 为符号扩展，否则为零扩展 wire jal; //是否调用子程序跳转 wire [31:0] immediate; //扩展后的立即数 wire [31:0] PCadd4; //存入寄存器中的值 wire oc; wire [4:0] CU2regaddr; wire [1:0] DBDataSrc; // 决定将什么数据传入寄存器组 Write Data 端，0 为 ALU 结 果， 为存储器 PCadd pc( .pcsource(pcindex), .curAddr(insAddr), .immediate(immediate), .addr(addr), //J 类型指令地址 .rsdata(rsOut), .PCadd4(PCadd4), .nextAddr(nextAddr) ); PC mypc(rst,clk,nextAddr,insAddr); alu myalu( .a(A), .b(B), .op(aluOP), .f(f), .z(z) ); wire mRD; wire mWR; wire [31:0] wdata; wire [31:0] rdata; extend myextend(sign_ext,imme,immediate); ID myid(instrument,opcode,func,rs,rt,rd,sa,imme,addr); wire [4:0] waddr; //写寄存器地址 wire [4:0] addrin1,addrin2,addrout;
